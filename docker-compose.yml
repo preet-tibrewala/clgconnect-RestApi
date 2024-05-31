@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  mongo:
+    image: mongo:latest
+    container_name: mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    ports:
+      - "27017:27017"
+    networks:
+      - clgconnect
+    volumes:
+      - mongo-data:/data/db
+
+networks:
+  clgconnect:
+    driver: bridge
+
+volumes:
+  mongo-data:
