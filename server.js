@@ -2,6 +2,12 @@ const express = require('express')
 const morgan = require('morgan')
 
 const api = require('./api')
+const https = require('https');
+const fs = require('fs');
+const options = {
+  key: fs.readFileSync('key.pem'),
+  cert: fs.readFileSync('cert.pem')
+};
 
 const { connectToDb } = require('./mongodb')
 
@@ -42,7 +48,7 @@ app.use('*', function (err, req, res, next) {
 
 connectToDb().then(function () {
 
-    app.listen(port, function() {
-      console.log("== Server is running on port", port)
-    })
+    https.createServer(options, app).listen(port, function () { // Create an HTTPS server
+        console.log("== Server is running on port", port);
+    });
 })
