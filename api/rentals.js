@@ -1,5 +1,6 @@
 const router = require('express').Router()
 const { validateAgainstSchema, extractValidFields } = require('../lib/validation')
+const { generateAuthToken, requireAuthentication } = require('../lib/auth');
 const { getDb } = require('../mongodb')
 exports.router = router
 const { ObjectId } = require('mongodb');
@@ -66,7 +67,15 @@ function uploadToGridFS(buffer, filename, mimetype, bucket) {
 
 }
 
-router.post('/', upload.array('image', 10), async function(req, res, next) {
+router.post('/', requireAuthentication, upload.array('image', 10), async function(req, res, next) {
+  console.log('User:', req.user);
+  console.log('Files:', req.files);
+  console.log('Request body:', req.body);
+  if (req.user.id !== req.body.ownerId) {
+    res.status(403).send({
+      error: "Unauthorized to access the specified resource"
+    });
+  } else {
     console.log(req.body);
     const db = getDb();
     const rentalsCollection = db.collection('rentals');
@@ -106,20 +115,31 @@ router.post('/', upload.array('image', 10), async function(req, res, next) {
         error: "Request body is not a valid rental object."
       });
     }
+  }
 })
 
-router.get('/:itemId', async function(req, res, next) {
+router.get('/:itemId', requireAuthentication, async function(req, res, next) {
     const db = getDb();
     const rentalsCollection = db.collection('rentals');
     const itemId = new ObjectId(req.params.itemId);
 
     try {
         const item = await rentalsCollection.findOne({ _id: itemId });
-        if (item) {
-          res.status(200).send(item);
-        } else {
-          next();
-        }
+        if(item){
+          if(item.ownerId != req.user.id) {
+            res.status(403).send({
+                error: "Unauthorized to access the specified resource"
+            });
+          }else{
+            if (item) {
+              res.status(200).send(item);
+            }
+          }
+        }else{
+          res.status(404).send({
+            error: "Requested rental item not found"
+          })
+        } 
       } catch (err) {
         next(err);
       }
@@ -166,7 +186,7 @@ updateReqSchema = {
 
 }
 
-router.patch('/:itemId', upload.array('image', 10), async function(req, res, next) {
+router.patch('/:itemId', requireAuthentication, upload.array('image', 10), async function(req, res, next) {
     console.log(req.body);
 
     const isValid = validateAgainstSchema(req.body, updateReqSchema);
@@ -178,12 +198,21 @@ router.patch('/:itemId', upload.array('image', 10), async function(req, res, nex
             const itemId = new ObjectId(req.params.itemId);
             const rentalsItem = extractValidFields(req.body, updateReqSchema);
             rentalsItem.TimeStamp = new Date();
-            const result = await rentalsCollection.updateOne({ _id: itemId }, { $set: rentalsItem });
-            if (result.matchedCount > 0) {
-                res.status(200).send();
-            } else {
-                next();
-            }
+
+
+            const item = await rentalsCollection.findOne({ _id: itemId });
+            if(item && item.ownerId.toString() === req.user.id){
+              const result = await rentalsCollection.updateOne({ _id: itemId }, { $set: rentalsItem });
+              if (result.matchedCount > 0) {
+                  res.status(200).send();
+              } else {
+                  next();
+              }  
+            }else{
+              res.status(403).send({
+                error: "Unauthorized to access the specified resource"
+              });
+            }   
         } catch (err) {
             next(err);
         }
@@ -194,16 +223,30 @@ router.patch('/:itemId', upload.array('image', 10), async function(req, res, nex
     }
 })
 
-router.delete('/:itemId', async function(req, res, next) {
+router.delete('/:itemId', requireAuthentication, async function(req, res, next) {
     const db = getDb();
     const rentalsCollection = db.collection('rentals');
     const itemId = new ObjectId(req.params.itemId);
   
     try {
-      const result = await rentalsCollection.deleteOne({ _id: itemId });
-      if (result.deletedCount > 0) {
-        res.status(204).send();
-      } else {
+
+      const item = await rentalsCollection.findOne({ _id: itemId });
+      console.log(item);
+      if(item){
+        const userIdObject = new ObjectId(req.user.id);
+        if (!item.ownerId.equals(userIdObject)){
+          res.status(403).send({
+            error: "Unauthorized to access the specified resource"
+          });
+        } else{
+          const result = await rentalsCollection.deleteOne({ _id: itemId });
+          if (result.deletedCount > 0) {
+            res.status(204).send();
+          } else {
+            next();
+          }
+        }
+      } else{
         next();
       }
     } catch (err) {

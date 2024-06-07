@@ -1,5 +1,6 @@
 const router = require('express').Router()
 const { validateAgainstSchema, extractValidFields } = require('../lib/validation')
+const { generateAuthToken, requireAuthentication } = require('../lib/auth');
 const { getDb } = require('../mongodb')
 exports.router = router
 const { ObjectId } = require('mongodb');
@@ -58,50 +59,63 @@ function uploadToGridFS(buffer, filename, mimetype, bucket) {
 
 }
 
-router.post('/', upload.array('image', 10), async function(req, res, next) {
-    console.log(req.body);
-    const db = getDb();
-    const marketplaceCollection = db.collection('marketplace');
-    const bucket = new GridFSBucket(db, {
-      bucketName: 'photos'
-    });
+router.post('/', requireAuthentication, upload.array('image', 10), async function(req, res, next) {
+  console.log('User:', req.user);
+  console.log('Files:', req.files);
+  console.log('Request body:', req.body);
 
-    if (validateAgainstSchema(req.body, marketplaceSchema)) {
-      try {
-        const marketplaceItem = extractValidFields(req.body, marketplaceSchema);
-        marketplaceItem.ownerId = new ObjectId(req.body.ownerId);
-        marketplaceItem.TimeStamp = new Date();
-        marketplaceItem.photos = [];
-
-        if (req.files && req.files.length > 0) {
-            for (const file of req.files) {
-              const fileId = await uploadToGridFS(file.buffer, file.originalname, file.mimetype, bucket);
-              marketplaceItem.photos.push({
-                imageId: fileId,
-                filename: file.originalname,
-                contentType: file.mimetype,
-                url: `${req.protocol}://${req.get('host')}/marketplace/${fileId}/download`
-              });
-            }
-        }
-
-        const result = await marketplaceCollection.insertOne(marketplaceItem);
-
-        if (result.insertedId) {
-          res.status(201).send({ itemID: result.insertedId });
-        } else {
-          next();
-        }
-      } catch (err) {
-        console.error("  -- error:", err);
-        next(err);
-      }
-    } else {
-      res.status(400).send({
-        error: "Request body is not a valid marketplace item object."
+  if (req.user.id !== req.body.ownerId) {
+      return res.status(403).send({
+          error: "Unauthorized to access the specified resource"
       });
-    }
-})
+  }
+
+  const db = getDb();
+  const marketplaceCollection = db.collection('marketplace');
+  const bucket = new GridFSBucket(db, { bucketName: 'photos' });
+
+  if (validateAgainstSchema(req.body, marketplaceSchema)) {
+      try {
+          const marketplaceItem = extractValidFields(req.body, marketplaceSchema);
+          marketplaceItem.ownerId = new ObjectId(req.body.ownerId);
+          marketplaceItem.TimeStamp = new Date();
+          marketplaceItem.photos = [];
+
+          console.log('Number of files:', req.files.length);
+
+          if (req.files && req.files.length > 0) {
+              for (const file of req.files) {
+                  const fileId = await uploadToGridFS(file.buffer, file.originalname, file.mimetype, bucket);
+                  console.log('Uploaded fileId:', fileId);
+                  marketplaceItem.photos.push({
+                      imageId: fileId,
+                      filename: file.originalname,
+                      contentType: file.mimetype,
+                      url: `${req.protocol}://${req.get('host')}/marketplace/${fileId}/download`
+                  });
+              }
+          }
+
+          const result = await marketplaceCollection.insertOne(marketplaceItem);
+
+          if (result.insertedId) {
+              res.status(201).send({ itemID: result.insertedId });
+          } else {
+              next();
+          }
+      } catch (err) {
+          console.error("Error during marketplace item creation:", err);
+          next(err);
+      }
+  } else {
+      res.status(400).send({
+          error: "Request body is not a valid marketplace item object."
+      });
+  }
+});
+
+
+
 router.get('/:fileId/download', async function(req, res, next) {
     const db = getDb();
     const bucket = new GridFSBucket(db, {
@@ -128,7 +142,7 @@ router.get('/:fileId/download', async function(req, res, next) {
     }
 });
 
-router.get('/:itemId', async function(req, res, next) {
+router.get('/:itemId', requireAuthentication, async function(req, res, next) {
     const db = getDb();
     const marketplaceCollection = db.collection('marketplace');
     const itemId = new ObjectId(req.params.itemId);
@@ -136,7 +150,13 @@ router.get('/:itemId', async function(req, res, next) {
     try {
       const item = await marketplaceCollection.findOne({ _id: itemId });
       if (item) {
-        res.status(200).send(item);
+        if(item.ownerId != req.user.id){
+          res.status(403).send({
+            error: "Unauthorized to access the specified resource"
+          });
+        }else{
+          res.status(200).send(item);
+        }
       } else {
         next();
       }
@@ -163,46 +183,69 @@ updateReqSchema = {
     description: { required: true }
 }
 
-router.patch('/:itemId', async function(req, res, next) {
-    console.log(req.body);
-    const isValid = validateAgainstSchema(req.body, updateReqSchema);
-    console.log(isValid);
-    if (isValid) {
-        try {
-            const db = getDb();
-            const marketplaceCollection = db.collection('marketplace');
-            const itemId = new ObjectId(req.params.itemId);
-            const marketplaceItem = extractValidFields(req.body, updateReqSchema);
-            marketplaceItem.TimeStamp = new Date();
-            const result = await marketplaceCollection.updateOne({ _id: itemId }, { $set: marketplaceItem });
-            if (result.matchedCount > 0) {
-                res.status(200).send();
-            } else {
-                next();
-            }
-        } catch (err) {
-            next(err);
-        }
-    } else {
-        res.status(400).send({
-            error: "Request body is not a valid marketplace item object."
-        });
-    }
+router.patch('/:itemId', requireAuthentication, async function(req, res, next) {
+  console.log(req.body);
+  const isValid = validateAgainstSchema(req.body, updateReqSchema);
+  console.log(isValid);
+  if (isValid) {
+      try {
+          const db = getDb();
+          const marketplaceCollection = db.collection('marketplace');
+          const itemId = new ObjectId(req.params.itemId);
+          const marketplaceItem = extractValidFields(req.body, updateReqSchema);
+          marketplaceItem.TimeStamp = new Date();
+          
+          // Check if the authenticated user is the owner of the item
+          const item = await marketplaceCollection.findOne({ _id: itemId });
+          if (item && item.ownerId.toString() === req.user.id) {
+              const result = await marketplaceCollection.updateOne({ _id: itemId }, { $set: marketplaceItem });
+              if (result.matchedCount > 0) {
+                  res.status(200).send();
+              } else {
+                  next();
+              }
+          } else {
+              res.status(403).send({
+                  error: "Unauthorized to access the specified resource"
+              });
+          }
+      } catch (err) {
+          next(err);
+      }
+  } else {
+      res.status(400).send({
+          error: "Request body is not a valid marketplace item object."
+      });
+  }
 });
 
-router.delete('/:itemId', async function(req, res, next) {
-    const db = getDb();
-    const marketplaceCollection = db.collection('marketplace');
-    const itemId = new ObjectId(req.params.itemId);
-  
-    try {
-      const result = await marketplaceCollection.deleteOne({ _id: itemId });
-      if (result.deletedCount > 0) {
-        res.status(204).send();
-      } else {
-        next();
+router.delete('/:itemId', requireAuthentication, async function(req, res, next) {
+  const db = getDb();
+  const marketplaceCollection = db.collection('marketplace');
+  const itemId = new ObjectId(req.params.itemId);
+
+  try {
+
+    const item = await marketplaceCollection.findOne({ _id: itemId });
+    console.log(item);
+    if(item){
+      const userIdObject = new ObjectId(req.user.id);
+      if (!item.ownerId.equals(userIdObject)){
+        res.status(403).send({
+          error: "Unauthorized to access the specified resource"
+        });
+      } else{
+        const result = await marketplaceCollection.deleteOne({ _id: itemId });
+        if (result.deletedCount > 0) {
+          res.status(204).send();
+        } else {
+          next();
+        }
       }
-    } catch (err) {
-      next(err);
+    } else{
+      next();
     }
+  } catch (err) {
+    next(err);
+  }
 });
