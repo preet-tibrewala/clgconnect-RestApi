@@ -31,9 +31,10 @@ router.post('/', async function(req, res, next) {
   
       res.status(201).send({ userId: result.insertedId });
     } catch (err) {
+      console.error(err);
       next(err);
     }
-  } else {
+  }else {
     res.status(400).send({
       error: "Request body is not a valid user object."
     });
@@ -56,8 +57,11 @@ router.get('/:userid', async function(req, res, next) {
 
   try {
     const user = await usersCollection.findOne({ _id: newUserId }, { projection: { password: 0 } })
-    //const user = await usersCollection.findOne({ _id: newUserId }).project({ password: 0 })
-    res.status(200).send(user)
+    if (user) {
+      res.status(200).send(user)
+    } else {
+      res.status(404).send({ error: "User not found" });
+    }
 
   } catch (err) {
     next(err)
@@ -104,7 +108,11 @@ router.delete('/:userid', async function(req, res, next) {
   
     try {
       const result = await usersCollection.deleteOne({ _id: newUserId })
-      res.status(200).send({ message : "User deleted successfully" });
+      if (result.deletedCount > 0) {
+        res.status(204).send({ message : "User deleted successfully" });
+      }else {
+        res.status(404).send({ error: "User not found" });
+      }
     } catch (err) {
       next(err)
     }  
@@ -123,7 +131,46 @@ router.get('/:userid/alerts', async function(req, res, next) {
 
   try {
     const alerts = await alertsCollection.find({ userID: newUserId }).toArray()
-    res.status(200).send(alerts)
+    if (alerts > 0) {
+      res.status(200).send(alerts)
+    } else {
+      res.status(404).send({ error: "Alerts not found for the specified user" });
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/:userid/rentals', async function(req, res, next) {
+  const db = getDb();
+  const rentalsCollection = db.collection('rentals');
+  const newUserId = new ObjectId(req.params.userid)
+  try{
+    const rentals = await rentalsCollection.find({ ownerId: newUserId }).toArray()
+    if(rentals.length > 0){
+      res.status(200).send(rentals)
+    }else{
+      res.status(404).send({ error: "Rentals Listings not found for the specified user" });
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+
+router.get('/:userid/marketplace', async function(req, res, next) {
+  const db = getDb();
+  const marketplaceCollection = db.collection('marketplace');
+  const newUserId = new ObjectId(req.params.userid)
+  console.log(newUserId)
+  try{
+    const marketplace = await marketplaceCollection.find({ ownerId: newUserId }).toArray()
+    console.log(marketplace)
+    if(marketplace.length > 0){
+      res.status(200).send(marketplace)
+    }else{
+      res.status(404).send({ error: "Marketplace Listings not found for the specified user" });
+    }
   } catch (err) {
     next(err)
   }
